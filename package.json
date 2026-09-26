@@ -14,7 +14,9 @@
     "rotate-verifier": "tsx scripts/rotate-verifier.ts",
     "agent": "tsx scripts/agent.ts",
     "deploy:sui": "tsx scripts/deploy-sui.ts",
-    "deploy:ledger": "tsx scripts/deploy-ledger.ts"
+    "deploy:ledger": "tsx scripts/deploy-ledger.ts",
+    "shopify:setup": "tsx scripts/shopify-setup.ts",
+    "shopify:deploy": "cd apps/shopify-app && npx -y @shopify/cli@latest app deploy"
   },
   "devDependencies": {
     "ts-node": "^10.9.1",
