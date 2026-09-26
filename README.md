@@ -88,6 +88,53 @@ A lender can't seize anything from a borrower who put nothing up. What Scalpless
 - **Resale proceeds repay the loan first**, before the seller sees anything.
 - Lenders choose their risk: a **junior tranche** takes losses first in exchange for most of the fees.
 
+### How the lending protocol works
+
+```mermaid
+flowchart LR
+  subgraph ID["Identity = collateral"]
+    WID["World ID<br/>once per human"] --> Passport["Credit Passport<br/>tier · limit · history"]
+  end
+
+  subgraph UW["Underwriting agent"]
+    Ledger[("MultiBaas<br/>credit history")] --> Gemini["Policy + Gemini<br/>can only tighten"]
+  end
+
+  Lenders["Lenders<br/>Senior LP · Junior LP"]
+  Pool[["LendingPool<br/>(Sui shared object)"]]
+  Borrower["Borrower<br/>with a won Claim"]
+  Merchant["Merchant"]
+  Keeper["Keeper agent<br/>or anyone"]
+
+  Passport --> Gemini
+  Lenders -- "① deposit" --> Pool
+  Gemini -- "② set_terms" --> Pool
+  Borrower -- "③ borrow_for_claim" --> Pool
+  Pool -- "④ pays face price" --> Merchant
+  Borrower -- "⑤ repay ×4" --> Pool
+  Pool -- "⑥ fees 40 / 60" --> Lenders
+  Pool -- "⑦ repaid → limit up" --> Passport
+  Keeper -- "⑧ mark_late / mark_default" --> Pool
+  Pool -- "⑨ default → locked out" --> Passport
+  Pool -. "loan events" .-> Ledger
+```
+
+1. **Deposit.** Lenders pick a tranche: `SENIOR_LP` (40% of fees, loses last) or `JUNIOR_LP` (60% of fees, first loss).
+2. **Terms.** The underwriting agent reads the passport and the MultiBaas credit history, computes policy terms, and lets
+   Gemini only tighten them. It then writes them with `set_terms`, which requires the `UnderwriterCap`.
+3. **Borrow.** `borrow_for_claim` checks that the caller holds the claim, the human re-verified with World ID, the passport isn't locked out, the terms are
+   valid, the amount is within the credit limit, and the pool has liquidity.
+4. **Pay the merchant.** The principal plus the entry deposit goes **straight to the merchant**. The borrower never holds loan cash
+   and keeps the (now paid) claim.
+5. **Repay** in 4 installments. Anyone can pay for the borrower, and resale proceeds and layaway refunds repay the loan
+   first (`route_income`).
+6. **Fees** are split 40% senior / 60% junior.
+7. **On-time repayment** raises the passport's credit limit.
+8. **Enforcement is permissionless.** After a missed installment plus the grace period, anyone can call `mark_late`; after the term plus grace, `mark_default`.
+9. **Default.** The junior tranche absorbs the loss first, then senior, and the human is locked out of loans and drops on every wallet.
+
+**Invariant (checked in tests):** `senior_assets + junior_assets == cash + outstanding_principal`.
+
 ### Fees and parameters
 
 | Item | Rule |
