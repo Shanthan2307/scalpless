@@ -1,0 +1,33 @@
+{
+  "network": "testnet",
+  "deployedAt": "2026-09-26T13:59:14.549Z",
+  "deployer": "0x03a760eac0f204c9d9f2c385cbbf58b009e0c76bcf3bf1c584cdbfe4c6991751",
+  "packageId": "0xe1494f19e9508dd7c77a069ca93d3c650f5f0be113ca332e63c6147b603ca856",
+  "registry": "0x36c29687751445013f24a45c40b386e773993137945952ee7d09c2bca8358c39",
+  "passportRegistry": "0x3cedfdc4279aac70caea943d8b5d930642638124de6f6a256f0df271a3ab20c0",
+  "market": "0xce85bc3d3140f7ebb9c4d73c5d178a2e682c7ac1bb208c1f6416b80db17d96c3",
+  "lendingPool": "0x0e643d8d46a8b9d7979a48f8201401f7fedf64521506ad4af0a2d7ddc3212e8b",
+  "adminCap": "0x659aa498f0878f686260475c745f3b0cb5ce6c0ec778128f7ff975eb47f6fbb8",
+  "underwriterCap": "0xb36b83f6455da3fbb9b73c63086bb42313c3e881892d7cdef1d603d83e7e1855",
+  "pool": {
+    "seniorFeeShareBps": 4000,
+    "termMs": 600000,
+    "graceMs": 120000
+  },
+  "transactions": {
+    "publish": "F3ngknuNJc6zrudhTmCN8YGXQQfSq4ro1iGW69KKWZ2e",
+    "initialize": "8Xs75DBzNABgKkgUTqHRUQywjVcGJPvsonS5UZxCiVVJ"
+  },
+  "latestPackageId": "0x967fa8931f432109fd71438964409270a6bf9876745df7a21fa33a15bab19fb7",
+  "upgrades": [
+    {
+      "version": 2,
+      "packageId": "0x967fa8931f432109fd71438964409270a6bf9876745df7a21fa33a15bab19fb7",
+      "tx": "4EPhw1uzEqk7ZWuRFrt4UAdG769JKGpMKsAJibogJKbK",
+      "added": [
+        "redeem"
+      ]
+    }
+  ],
+  "upgradeCap": "0x3220d4a2005deba81831ca8b7c09a175436933bea4734cdc66f5ebf94b7e5301"
+}
