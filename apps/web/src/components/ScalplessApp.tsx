@@ -12,13 +12,15 @@ import FeaturedDropsView from './views/FeaturedDropsView';
 import ResaleMarketView from './views/ResaleMarketView';
 import WorldIdentityView from './views/WorldIdentityView';
 import LoansAndEmiView from './views/LoansAndEmiView';
+import MerchantView from './views/MerchantView';
 
 const TABS = [
   { id: 'landing', label: '01 / LANDING' },
   { id: 'drops', label: '02 / DROPS' },
   { id: 'market', label: '03 / CLAIMS & RESALE' },
   { id: 'worldid', label: '04 / WORLD ID PASSPORT' },
-  { id: 'loans', label: '05 / LENDING' }
+  { id: 'loans', label: '05 / LENDING' },
+  { id: 'merchant', label: '06 / MERCHANT' }
 ];
 
 export default function ScalplessApp() {
@@ -97,6 +99,7 @@ function ScalplessShell() {
           {activeTab === 'market' && <ResaleMarketView />}
           {activeTab === 'worldid' && <WorldIdentityView />}
           {activeTab === 'loans' && <LoansAndEmiView />}
+          {activeTab === 'merchant' && <MerchantView />}
         </main>
       </div>
       <TxToast />
