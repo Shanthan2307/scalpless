@@ -187,6 +187,52 @@ app.post('/api/world/signout', (_req, res) => {
   res.json({ signedIn: false });
 });
 
+// Ed25519 attestation the Move registry verifies. Issued only to the verified human, only for
+// the wallet their World ID proof was bound to.
+app.post('/api/world/attest', async (req, res, next) => {
+  try {
+    const s = requireSession(req, res);
+    if (!s) return;
+    const { action, wallet, target } = req.body ?? {};
+    if (!ATTESTABLE_ACTIONS.includes(action)) {
+      return res.status(400).json({ error: 'BAD_ACTION', message: `action must be one of ${ATTESTABLE_ACTIONS.join(', ')}` });
+    }
+    if (typeof wallet !== 'string' || normalizeWallet(wallet) !== s.wallet) {
+      return res.status(403).json({ error: 'WALLET_MISMATCH', message: 'Attestations are only issued to the wallet you verified with' });
+    }
+    if ((action as AttestableAction) === 'claim-win') {
+      const age = Math.floor(Date.now() / 1000) - (s.livenessAt ?? 0);
+      if (age > LIVENESS_WINDOW_SECONDS) {
+        return res.status(403).json({ error: 'LIVENESS_REQUIRED', message: 'Re-verify with World ID to claim your win' });
+      }
+    }
+    // The object the attestation may be spent on. Minting always targets the PassportRegistry;
+    // delegation only to an agent this human paired.
+    let targetAddr: string;
+    if ((action as AttestableAction) === 'mint-credit-passport') {
+      targetAddr = env.PASSPORT_REGISTRY_ID;
+    } else {
+      if (typeof target !== 'string') return res.status(400).json({ error: 'BAD_TARGET', message: 'target is required' });
+      targetAddr = normalizeWallet(target);
+      if ((action as AttestableAction) === 'delegate-agent' && !humanStore.agentsForHuman(s.humanKey).some((a) => a.suiAddress === targetAddr)) {
+        return res.status(403).json({ error: 'AGENT_NOT_PAIRED', message: 'Pair this agent with a link code first' });
+      }
+    }
+    const expiry_ms = Date.now() + ATTESTATION_TTL_MS;
+    const attestation = await attestationService.signAttestation({
+      human_key: s.humanKey,
+      credential_tier: s.tier,
+      action,
+      target: targetAddr,
+      subject: s.wallet,
+      expiry_ms,
+    });
+    res.json({ action, target: targetAddr, credential_tier: s.tier, nullifier_hex: s.humanKey, wallet: s.wallet, attestation });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // ---- errors ----------------------------------------------------------------------------------
 
 app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
