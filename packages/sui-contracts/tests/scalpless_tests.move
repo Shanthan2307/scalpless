@@ -613,3 +613,96 @@ fun cannot_default_early() {
     pool.mark_default(&mut preg, alice_key(), &clock);
     abort 0
 }
+
+// ---- market -----------------------------------------------------------------------------------
+
+fun settle_claim_for(sc: &mut Scenario, clock: &mut Clock, who: address, human: vector<u8>) {
+    register(sc, who, human, 3);
+    create_drop(sc, clock, 1, 0);
+    enter(sc, clock, who, human);
+    draw(sc, clock);
+    verify_liveness(sc, clock, who, human);
+}
+
+fun list(sc: &mut Scenario, who: address, ask: u64) {
+    sc.next_tx(who);
+    let mut m = sc.take_shared<Market>();
+    let c = sc.take_from_sender<Claim>();
+    m.list(c, ask, sc.ctx());
+    ts::return_shared(m);
+}
+
+fun buy(sc: &mut Scenario, who: address, human: vector<u8>, price: u64) {
+    sc.next_tx(who);
+    let mut m = sc.take_shared<Market>();
+    let mut pool = sc.take_shared<LendingPool>();
+    let mut preg = sc.take_shared<PassportRegistry>();
+    let ticket = ts::most_recent_receiving_ticket<Claim>(&object::id(&m));
+    let claim_addr = ticket.receiving_object_id().to_address();
+    let a = registry::attested_for_testing(human, 2, b"buy-resale", claim_addr, sc.ctx());
+    m.buy(&mut pool, &mut preg, a, ticket, coin::mint_for_testing<SUI>(price, sc.ctx()), sc.ctx());
+    ts::return_shared(m);
+    ts::return_shared(pool);
+    ts::return_shared(preg);
+}
+
+#[test, expected_failure(abort_code = market::EPriceExceedsFairCap)]
+fun market_rejects_scalper_price() {
+    let (mut sc, mut clock) = setup();
+    settle_claim_for(&mut sc, &mut clock, ALICE, alice_key());
+    pay_in_full(&mut sc, &clock, ALICE);
+    list(&mut sc, ALICE, ONE_SUI * 110 / 100 + 1);
+    abort 0
+}
+
+#[test]
+/// Resale at the cap: proceeds repay the seller's loan first (IncomeRouter), the rest goes to the
+/// seller, and the claim goes to the buyer's wallet.
+fun market_resale_repays_seller_loan() {
+    let (mut sc, mut clock) = setup();
+    fund_pool(&mut sc, 3 * ONE_SUI, 2 * ONE_SUI);
+    settle_claim_for(&mut sc, &mut clock, ALICE, alice_key());
+    set_terms(&mut sc, alice_key(), ONE_SUI, 1_000);
+    borrow(&mut sc, &clock, ALICE);
+    register(&mut sc, BOB, bob_key(), 2);
+
+    let ask = ONE_SUI * 110 / 100;
+    list(&mut sc, ALICE, ask);
+    buy(&mut sc, BOB, bob_key(), ask);
+
+    sc.next_tx(BOB);
+    let principal = ONE_SUI - ONE_SUI / 10;
+    let owed = principal + principal / 10;
+    {
+        let pool = sc.take_shared<LendingPool>();
+        assert!(!pool.has_loan(alice_key()));
+        ts::return_shared(pool);
+    };
+    assert!(sui_balance(&sc, ALICE) == ask - owed);
+    let c = sc.take_from_sender<Claim>();
+    assert!(c.holder() == BOB && c.human_key() == bob_key());
+    sc.return_to_sender(c);
+    finish(sc, clock);
+}
+
+#[test, expected_failure(abort_code = market::EAlreadyBoughtThisDrop)]
+/// One resale claim per human per drop — no sweeping.
+fun market_one_resale_per_drop() {
+    let (mut sc, mut clock) = setup();
+    register(&mut sc, ALICE, alice_key(), 3);
+    register(&mut sc, CAROL, carol_key(), 3);
+    register(&mut sc, BOB, bob_key(), 2);
+    create_drop(&mut sc, &clock, 2, 0);
+    enter(&mut sc, &clock, ALICE, alice_key());
+    enter(&mut sc, &clock, CAROL, carol_key());
+    draw(&mut sc, &mut clock); // 2 units, 2 entrants: both win
+    verify_liveness(&mut sc, &clock, ALICE, alice_key());
+    verify_liveness(&mut sc, &clock, CAROL, carol_key());
+    pay_in_full(&mut sc, &clock, ALICE);
+    pay_in_full(&mut sc, &clock, CAROL);
+    list(&mut sc, ALICE, ONE_SUI);
+    buy(&mut sc, BOB, bob_key(), ONE_SUI);
+    list(&mut sc, CAROL, ONE_SUI);
+    buy(&mut sc, BOB, bob_key(), ONE_SUI);
+    abort 0
+}
