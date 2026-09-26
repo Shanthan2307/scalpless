@@ -6,6 +6,7 @@ import { getSession, setSession, clearSession, type SessionPayload } from './ser
 import { humanStore, type HumanRecord } from './services/human-store.service';
 import { authenticateAgent, requireIntent, AgentkitError } from './services/agentkit.service';
 import { randomBytes } from 'crypto';
+import { underwrite } from './services/underwriting.service';
 
 const app = express();
 // The web app proxies /api/* to this server (apps/web/next.config.mjs), so the session cookie
@@ -337,6 +338,19 @@ app.post('/api/agent/attest', async (req, res, next) => {
       expiry_ms,
     });
     res.json({ action, target, credential_tier: human.tier, nullifier_hex: human.humanKey, wallet: link.suiAddress, attestation });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// ---- Underwriting ----------------------------------------------------------------------------
+// Reads the caller's passport from chain, decides terms, writes them on-chain (UnderwriterCap).
+
+app.post('/api/underwriting/evaluate', async (req, res, next) => {
+  try {
+    const s = requireSession(req, res);
+    if (!s) return;
+    res.json(await underwrite(s.humanKey));
   } catch (err) {
     next(err);
   }
