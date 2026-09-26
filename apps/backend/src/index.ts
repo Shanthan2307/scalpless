@@ -11,6 +11,7 @@ import { ledgerEvents } from './services/multibaas.service';
 import { runKeeper, keeperActivity, startKeeper } from './services/keeper.service';
 import { redemptions, orderCreatorReady } from './services/redemption.service';
 import { objectJson } from './services/chain.service';
+import { shopifyConfigured, shopInfo, listProducts, linkDrop, startShopify } from './services/shopify.service';
 import { underwrite } from './services/underwriting.service';
 
 const app = express();
@@ -465,6 +466,41 @@ app.get('/api/redemptions', (req, res) => {
   res.json({ redemptions: redemptions.forWallet(s.wallet).map(({ shipping, ...r }) => ({ ...r, shipTo: `${shipping.name}, ${shipping.city}` })), shopifyConnected: orderCreatorReady() });
 });
 
+// ---- Shopify (merchant) -------------------------------------------------------------------------
+
+app.get('/api/shopify/status', async (_req, res) => {
+  if (!shopifyConfigured()) return res.json({ connected: false });
+  try {
+    res.json({ connected: true, shop: await shopInfo() });
+  } catch (err) {
+    res.json({ connected: false, error: err instanceof Error ? err.message : String(err) });
+  }
+});
+
+app.get('/api/shopify/products', async (req, res, next) => {
+  try {
+    if (!requireSession(req, res)) return;
+    if (!shopifyConfigured()) return res.status(409).json({ error: 'SHOPIFY_NOT_CONNECTED', message: 'Connect the Shopify store first' });
+    res.json({ products: await listProducts() });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Called after the merchant's create_drop transaction: link the Sui drop to a Shopify variant.
+app.post('/api/shopify/link', async (req, res, next) => {
+  try {
+    if (!requireSession(req, res)) return;
+    const { dropId, productId, variantId } = req.body ?? {};
+    if (![dropId, productId, variantId].every((v) => typeof v === 'string')) return res.status(400).json({ error: 'BAD_REQUEST', message: 'dropId, productId, variantId required' });
+    const origin = (req.headers['x-forwarded-host'] as string) ?? req.headers.host;
+    await linkDrop({ dropId, productId, variantId, appUrl: process.env.PUBLIC_APP_URL || `http://${origin}` });
+    res.json({ linked: true });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // ---- Keeper agent -------------------------------------------------------------------------------
 
 app.get('/api/keeper/activity', (_req, res) => res.json({ activity: keeperActivity() }));
@@ -499,6 +535,7 @@ app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
 export const server = app.listen(env.PORT, () => {
   startMirror();
   startKeeper();
+  startShopify();
   console.log(`[Scalpless Backend] Listening on port ${env.PORT}`);
   console.log(`[Scalpless Backend] Package ID: ${env.PACKAGE_ID}`);
   console.log(`[Scalpless Backend] Attestation pubkey: ${attestationService.getPublicKeyHex()}`);
