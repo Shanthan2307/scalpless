@@ -9,6 +9,8 @@ import { randomBytes } from 'crypto';
 import { startMirror, mirrorState } from './services/mirror.service';
 import { ledgerEvents } from './services/multibaas.service';
 import { runKeeper, keeperActivity, startKeeper } from './services/keeper.service';
+import { redemptions, orderCreatorReady } from './services/redemption.service';
+import { objectJson } from './services/chain.service';
 import { underwrite } from './services/underwriting.service';
 
 const app = express();
@@ -432,6 +434,35 @@ app.get('/api/ledger/credit/:humanKey', async (req, res, next) => {
   } catch (err) {
     next(err);
   }
+});
+
+// ---- Redemptions (claim → Shopify order) ------------------------------------------------------
+
+// Register a shipping address for a paid claim, before signing redeem::redeem.
+app.post('/api/redemptions', async (req, res, next) => {
+  try {
+    const s = requireSession(req, res);
+    if (!s) return;
+    const { claimId, shipping } = req.body ?? {};
+    const required = ['name', 'address1', 'city', 'zip', 'country'];
+    if (typeof claimId !== 'string' || !shipping || required.some((k) => typeof shipping[k] !== 'string' || !shipping[k].trim())) {
+      return res.status(400).json({ error: 'BAD_REQUEST', message: `claimId and shipping.{${required.join(', ')}} are required` });
+    }
+    const claim = await objectJson<{ holder: string; status: number; item_name: string }>(claimId);
+    if (!claim) return res.status(404).json({ error: 'NO_CLAIM', message: 'Claim not found (already redeemed?)' });
+    if (claim.holder !== s.wallet) return res.status(403).json({ error: 'NOT_HOLDER', message: 'You do not hold this claim' });
+    if (claim.status !== 3) return res.status(409).json({ error: 'NOT_PAID', message: 'Only paid claims can be redeemed' });
+    const r = redemptions.upsert({ claimId, wallet: s.wallet, humanKey: s.humanKey, itemName: claim.item_name, shipping, status: 'awaiting_redeem_tx' });
+    res.json({ redemption: r, shopifyConnected: orderCreatorReady() });
+  } catch (err) {
+    next(err);
+  }
+});
+
+app.get('/api/redemptions', (req, res) => {
+  const s = requireSession(req, res);
+  if (!s) return;
+  res.json({ redemptions: redemptions.forWallet(s.wallet).map(({ shipping, ...r }) => ({ ...r, shipTo: `${shipping.name}, ${shipping.city}` })), shopifyConnected: orderCreatorReady() });
 });
 
 // ---- Keeper agent -------------------------------------------------------------------------------
