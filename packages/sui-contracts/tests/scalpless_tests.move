@@ -486,3 +486,130 @@ fun layaway_default_passes_claim_to_waitlist() {
     assert!(sui_balance(&sc, loser) == loser_refund); // unchanged: the waitlist is free
     finish(sc, clock);
 }
+
+// ---- lending ----------------------------------------------------------------------------------
+
+#[test]
+/// Borrow on yourself: the pool pays the seller, the loan is repaid, lenders earn the fee.
+fun borrow_repay_and_lp_yield() {
+    let (mut sc, mut clock) = setup();
+    register(&mut sc, ALICE, alice_key(), 3);
+    fund_pool(&mut sc, 3 * ONE_SUI, 2 * ONE_SUI);
+    create_drop(&mut sc, &clock, 1, 0);
+    enter(&mut sc, &clock, ALICE, alice_key());
+    draw(&mut sc, &mut clock);
+    verify_liveness(&mut sc, &clock, ALICE, alice_key());
+    set_terms(&mut sc, alice_key(), ONE_SUI, 1_000); // 10% fee
+    borrow(&mut sc, &clock, ALICE);
+
+    sc.next_tx(ALICE);
+    assert!(sui_balance(&sc, SELLER) == ONE_SUI);
+    let principal = ONE_SUI - ONE_SUI / 10;
+    let fee = principal / 10;
+    {
+        let mut pool = sc.take_shared<LendingPool>();
+        let mut preg = sc.take_shared<PassportRegistry>();
+        assert!(pool.amount_owed(alice_key()) == principal + fee);
+        assert!(pool.cash() == 5 * ONE_SUI - principal);
+        let change = pool.repay(&mut preg, alice_key(), coin::mint_for_testing<SUI>(principal + fee, sc.ctx()));
+        change.destroy_zero();
+        assert!(!pool.has_loan(alice_key()));
+        assert!(pool.senior_assets() == 3 * ONE_SUI + fee * 4 / 10);
+        assert!(pool.junior_assets() == 2 * ONE_SUI + fee * 6 / 10);
+        assert!(pool.senior_assets() + pool.junior_assets() == pool.cash() + pool.outstanding_principal());
+        assert!(preg.on_time_repayments(alice_key()) == 1);
+        assert!(preg.credit_limit_mist(alice_key()) == ONE_SUI + ONE_SUI / 2);
+        ts::return_shared(pool);
+        ts::return_shared(preg);
+    };
+
+    sc.next_tx(LENDER);
+    {
+        let mut pool = sc.take_shared<LendingPool>();
+        let j = sc.take_from_sender<Coin<JUNIOR_LP>>();
+        let out = pool.withdraw_junior(j, sc.ctx());
+        assert!(out.value() == 2 * ONE_SUI + fee * 6 / 10);
+        transfer::public_transfer(out, LENDER);
+        ts::return_shared(pool);
+    };
+    finish(sc, clock);
+}
+
+#[test, expected_failure(abort_code = lending::ENoTerms)]
+/// No underwriting decision, no loan.
+fun borrow_requires_terms() {
+    let (mut sc, mut clock) = setup();
+    register(&mut sc, ALICE, alice_key(), 3);
+    fund_pool(&mut sc, 3 * ONE_SUI, 2 * ONE_SUI);
+    create_drop(&mut sc, &clock, 1, 0);
+    enter(&mut sc, &clock, ALICE, alice_key());
+    draw(&mut sc, &mut clock);
+    verify_liveness(&mut sc, &clock, ALICE, alice_key());
+    borrow(&mut sc, &clock, ALICE);
+    abort 0
+}
+
+#[test, expected_failure(abort_code = drop::ELockedOut)]
+/// Walk away from a loan: a keeper defaults it after term + grace, the junior tranche absorbs the
+/// loss, and the human is locked out — they can't even enter the next drop.
+fun default_absorbs_junior_and_locks_out() {
+    let (mut sc, mut clock) = setup();
+    register(&mut sc, ALICE, alice_key(), 3);
+    fund_pool(&mut sc, 3 * ONE_SUI, 2 * ONE_SUI);
+    create_drop(&mut sc, &clock, 1, 0);
+    enter(&mut sc, &clock, ALICE, alice_key());
+    draw(&mut sc, &mut clock);
+    verify_liveness(&mut sc, &clock, ALICE, alice_key());
+    set_terms(&mut sc, alice_key(), ONE_SUI, 1_000);
+    borrow(&mut sc, &clock, ALICE);
+
+    clock.increment_for_testing(3 * MIN + 1); // first installment missed + grace
+    sc.next_tx(KEEPER);
+    {
+        let mut pool = sc.take_shared<LendingPool>();
+        let mut preg = sc.take_shared<PassportRegistry>();
+        pool.mark_late(&mut preg, alice_key(), &clock);
+        assert!(preg.standing(alice_key()) == passport::standing_late());
+        ts::return_shared(pool);
+        ts::return_shared(preg);
+    };
+    clock.increment_for_testing(6 * MIN); // past term (8m) + grace (1m)
+    sc.next_tx(KEEPER);
+    {
+        let mut pool = sc.take_shared<LendingPool>();
+        let mut preg = sc.take_shared<PassportRegistry>();
+        pool.mark_default(&mut preg, alice_key(), &clock);
+        let principal = ONE_SUI - ONE_SUI / 10;
+        assert!(pool.junior_assets() == 2 * ONE_SUI - principal);
+        assert!(pool.senior_assets() == 3 * ONE_SUI);
+        assert!(pool.senior_assets() + pool.junior_assets() == pool.cash() + pool.outstanding_principal());
+        assert!(preg.is_locked_out(alice_key()));
+        assert!(preg.credit_limit_mist(alice_key()) == 0);
+        ts::return_shared(pool);
+        ts::return_shared(preg);
+    };
+    // A new drop: the locked-out human is turned away.
+    sc.next_tx(SELLER);
+    drop::create_drop(b"Next drop".to_string(), ONE_SUI, 1, 0, clock.timestamp_ms() + 5 * MIN, 10 * MIN, 2 * MIN, &clock, sc.ctx());
+    enter(&mut sc, &clock, ALICE, alice_key());
+    abort 0
+}
+
+#[test, expected_failure(abort_code = lending::ETermNotElapsed)]
+/// Nobody can default a loan early.
+fun cannot_default_early() {
+    let (mut sc, mut clock) = setup();
+    register(&mut sc, ALICE, alice_key(), 3);
+    fund_pool(&mut sc, 3 * ONE_SUI, 2 * ONE_SUI);
+    create_drop(&mut sc, &clock, 1, 0);
+    enter(&mut sc, &clock, ALICE, alice_key());
+    draw(&mut sc, &mut clock);
+    verify_liveness(&mut sc, &clock, ALICE, alice_key());
+    set_terms(&mut sc, alice_key(), ONE_SUI, 1_000);
+    borrow(&mut sc, &clock, ALICE);
+    sc.next_tx(KEEPER);
+    let mut pool = sc.take_shared<LendingPool>();
+    let mut preg = sc.take_shared<PassportRegistry>();
+    pool.mark_default(&mut preg, alice_key(), &clock);
+    abort 0
+}
