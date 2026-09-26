@@ -1,0 +1,6 @@
+[package]
+name = "scalpless"
+edition = "2024"
+
+[dependencies]
+
