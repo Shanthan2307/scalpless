@@ -349,3 +349,140 @@ fun agent_enters_for_human() {
     assert!(!ts::has_most_recent_for_address<Claim>(AGENT));
     finish(sc, clock);
 }
+
+// ---- settlement -------------------------------------------------------------------------------
+
+#[test]
+fun pay_in_full_pays_seller_face_price() {
+    let (mut sc, mut clock) = setup();
+    register(&mut sc, ALICE, alice_key(), 3);
+    create_drop(&mut sc, &clock, 1, 0);
+    enter(&mut sc, &clock, ALICE, alice_key());
+    draw(&mut sc, &mut clock);
+    verify_liveness(&mut sc, &clock, ALICE, alice_key());
+    pay_in_full(&mut sc, &clock, ALICE);
+    sc.next_tx(ALICE);
+    assert!(sui_balance(&sc, SELLER) == ONE_SUI);
+    let c = sc.take_from_sender<Claim>();
+    assert!(c.status() == claim::status_settled());
+    sc.return_to_sender(c);
+    finish(sc, clock);
+}
+
+#[test, expected_failure(abort_code = claim::EWrongHuman)]
+/// A win can only be claimed with the winner's own World ID.
+fun liveness_requires_winning_human() {
+    let (mut sc, mut clock) = setup();
+    register(&mut sc, ALICE, alice_key(), 3);
+    create_drop(&mut sc, &clock, 1, 0);
+    enter(&mut sc, &clock, ALICE, alice_key());
+    draw(&mut sc, &mut clock);
+    verify_liveness(&mut sc, &clock, ALICE, bob_key());
+    abort 0
+}
+
+#[test, expected_failure(abort_code = claim::EWrongStatus)]
+/// No settlement before the winner proves liveness.
+fun pay_requires_liveness() {
+    let (mut sc, mut clock) = setup();
+    register(&mut sc, ALICE, alice_key(), 3);
+    create_drop(&mut sc, &clock, 1, 0);
+    enter(&mut sc, &clock, ALICE, alice_key());
+    draw(&mut sc, &mut clock);
+    pay_in_full(&mut sc, &clock, ALICE);
+    abort 0
+}
+
+#[test]
+/// Layaway: plan holds the claim; after 4 installments the claim returns settled and credit grows.
+fun layaway_completes_and_raises_limit() {
+    let (mut sc, mut clock) = setup();
+    register(&mut sc, ALICE, alice_key(), 3);
+    create_drop(&mut sc, &clock, 1, 0);
+    enter(&mut sc, &clock, ALICE, alice_key());
+    draw(&mut sc, &mut clock);
+    verify_liveness(&mut sc, &clock, ALICE, alice_key());
+
+    sc.next_tx(ALICE);
+    {
+        let mut d = sc.take_shared<Drop>();
+        let c = sc.take_from_sender<Claim>();
+        let down = coin::mint_for_testing<SUI>(ONE_SUI / 4 - ONE_SUI / 10, sc.ctx());
+        settlement::start_layaway(&mut d, c, down, &clock, sc.ctx());
+        ts::return_shared(d);
+    };
+    let mut i = 0;
+    while (i < 3) {
+        sc.next_tx(ALICE);
+        let mut plan = sc.take_shared<LayawayPlan>();
+        settlement::pay_installment(&mut plan, coin::mint_for_testing<SUI>(ONE_SUI / 4, sc.ctx()), &clock);
+        ts::return_shared(plan);
+        i = i + 1;
+    };
+    sc.next_tx(ALICE);
+    {
+        let mut plan = sc.take_shared<LayawayPlan>();
+        let mut preg = sc.take_shared<PassportRegistry>();
+        let ticket = ts::most_recent_receiving_ticket<Claim>(&object::id(&plan));
+        settlement::complete_layaway(&mut plan, &mut preg, ticket, sc.ctx());
+        assert!(preg.completed_layaways(alice_key()) == 1);
+        assert!(preg.credit_limit_mist(alice_key()) == ONE_SUI + ONE_SUI / 4);
+        ts::return_shared(plan);
+        ts::return_shared(preg);
+    };
+    sc.next_tx(ALICE);
+    assert!(sui_balance(&sc, SELLER) == ONE_SUI);
+    let c = sc.take_from_sender<Claim>();
+    assert!(c.status() == claim::status_settled());
+    sc.return_to_sender(c);
+    finish(sc, clock);
+}
+
+#[test]
+/// Missed installment: anyone can default the plan; the buyer is refunded 95% and the claim goes
+/// to the next human on the waitlist.
+fun layaway_default_passes_claim_to_waitlist() {
+    let (mut sc, mut clock) = setup();
+    register(&mut sc, ALICE, alice_key(), 3);
+    register(&mut sc, CAROL, carol_key(), 3);
+    create_drop(&mut sc, &clock, 1, 0);
+    enter(&mut sc, &clock, ALICE, alice_key());
+    enter(&mut sc, &clock, CAROL, carol_key());
+    draw(&mut sc, &mut clock);
+    sc.next_tx(KEEPER);
+    let alice_won = ts::has_most_recent_for_address<Claim>(ALICE);
+    let (winner, winner_key, loser) = if (alice_won) (ALICE, alice_key(), CAROL) else (CAROL, carol_key(), ALICE);
+    let loser_refund = sui_balance(&sc, loser);
+
+    verify_liveness(&mut sc, &clock, winner, winner_key);
+    sc.next_tx(winner);
+    {
+        let mut d = sc.take_shared<Drop>();
+        let c = sc.take_from_sender<Claim>();
+        settlement::start_layaway(&mut d, c, coin::mint_for_testing<SUI>(ONE_SUI / 4 - ONE_SUI / 10, sc.ctx()), &clock, sc.ctx());
+        ts::return_shared(d);
+    };
+    clock.increment_for_testing(3 * MIN); // past the 2-minute installment
+    sc.next_tx(KEEPER);
+    {
+        let mut plan = sc.take_shared<LayawayPlan>();
+        let mut d = sc.take_shared<Drop>();
+        let mut pool = sc.take_shared<LendingPool>();
+        let mut preg = sc.take_shared<PassportRegistry>();
+        let ticket = ts::most_recent_receiving_ticket<Claim>(&object::id(&plan));
+        settlement::default_layaway(&mut plan, &mut d, &mut pool, &mut preg, ticket, &clock, sc.ctx());
+        ts::return_shared(plan);
+        ts::return_shared(d);
+        ts::return_shared(pool);
+        ts::return_shared(preg);
+    };
+    sc.next_tx(loser);
+    let c = sc.take_from_sender<Claim>();
+    assert!(c.status() == claim::status_won());
+    sc.return_to_sender(c);
+    let refund = ONE_SUI / 4 - (ONE_SUI / 4) * 5 / 100;
+    assert!(sui_balance(&sc, winner) == refund);
+    assert!(sui_balance(&sc, SELLER) == ONE_SUI / 4 - refund);
+    assert!(sui_balance(&sc, loser) == loser_refund); // unchanged: the waitlist is free
+    finish(sc, clock);
+}
