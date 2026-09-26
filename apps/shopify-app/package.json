@@ -1,0 +1,8 @@
+{
+  "name": "scalpless-shopify-app",
+  "private": true,
+  "scripts": {
+    "deploy": "npx -y @shopify/cli@latest app deploy",
+    "info": "npx -y @shopify/cli@latest app info"
+  }
+}

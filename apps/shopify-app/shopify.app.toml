@@ -1,0 +1,20 @@
+# Scalpless Shopify app (Dev Dashboard app "Scalpless").
+# Deploy the theme app extension + this config:  npx @shopify/cli@latest app deploy
+client_id = "70c0088b88250f2aed2be03a68a9f792"
+name = "Scalpless"
+application_url = "http://localhost:3000"
+embedded = false
+
+[access_scopes]
+# products/orders/inventory: drops, redeemed-claim orders, stock
+# publications/navigation/locations: publish new products + the Drops collection, add Drops to the menu, set stock per location
+scopes = "read_products,write_products,read_orders,write_orders,read_inventory,write_inventory,read_locations,read_publications,write_publications,write_online_store_navigation"
+
+[auth]
+redirect_urls = ["http://localhost:3000/api/shopify/callback"]
+
+[webhooks]
+api_version = "2025-10"
+
+[build]
+include_config_on_deploy = true
