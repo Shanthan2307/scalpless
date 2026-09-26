@@ -43,6 +43,106 @@ interface ShopifyProduct {
   variants: { id: string; title: string; price: string; inventory: number | null }[];
 }
 
+interface DropParams {
+  price: string;
+  units: string;
+  entry: string;
+  claim: string;
+  interval: string;
+}
+
+/** Create the Sui drop, then link it to the Shopify variant (tag, storefront block, ledger). */
+async function launchLinkedDrop(title: string, productId: string, variantId: string, f: DropParams) {
+  const t = await signAndExecute(
+    createDropTx({
+      title,
+      facePriceMist: toMist(f.price),
+      units: Number(f.units),
+      minTier: 0,
+      entryDeadlineMs: Date.now() + Number(f.entry) * 60_000,
+      claimWindowMs: Number(f.claim) * 60_000,
+      installmentIntervalMs: Number(f.interval) * 60_000,
+    }),
+  );
+  const dropId = t.effects.changedObjects.find((o) => o.idOperation === 'Created' && o.outputOwner?.$kind === 'Shared')?.objectId;
+  if (!dropId) throw new Error('drop created but its id was not found in the effects');
+  const res = await fetch('/api/shopify/link', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ dropId, productId, variantId }) });
+  const body = await res.json();
+  if (!res.ok) throw new Error(`drop ${dropId} created, but linking failed: ${body.message || body.error}`);
+  return t.digest;
+}
+
+/** Downscale a photo in the browser (max 1600px, JPEG) and return it base64-encoded. */
+async function encodeImage(file: File) {
+  const bitmap = await createImageBitmap(file);
+  const scale = Math.min(1, 1600 / Math.max(bitmap.width, bitmap.height));
+  const canvas = document.createElement('canvas');
+  canvas.width = Math.round(bitmap.width * scale);
+  canvas.height = Math.round(bitmap.height * scale);
+  canvas.getContext('2d')!.drawImage(bitmap, 0, 0, canvas.width, canvas.height);
+  const dataUrl = canvas.toDataURL('image/jpeg', 0.85);
+  return { filename: file.name.replace(/\.[^.]+$/, '') + '.jpg', mimeType: 'image/jpeg', base64: dataUrl.split(',')[1] };
+}
+
+function NewProduct() {
+  const queryClient = useQueryClient();
+  const [p, setP] = useState({ title: '', description: '', priceUsd: '', inventory: '10' });
+  const [files, setFiles] = useState<File[]>([]);
+  const [launch, setLaunch] = useState(true);
+  const [d, setD] = useState<DropParams>({ price: '0.5', units: '1', entry: '5', claim: '20', interval: '2' });
+  const [busy, setBusy] = useState(false);
+  const [msg, setMsg] = useState<{ ok?: string; warnings?: string[]; digest?: string; error?: string } | null>(null);
+
+  const submit = async () => {
+    setBusy(true);
+    setMsg(null);
+    try {
+      const images = await Promise.all(files.map(encodeImage));
+      const res = await fetch('/api/shopify/products', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ ...p, images }) });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.message || body.error);
+      let digest: string | undefined;
+      if (launch) digest = await launchLinkedDrop(p.title, body.productId, body.variantId, d);
+      setMsg({ ok: `Created "${p.title}" in Shopify${launch ? ' and launched it as a fair drop' : ''}.`, warnings: body.warnings, digest });
+      setP({ title: '', description: '', priceUsd: '', inventory: '10' });
+      setFiles([]);
+      await queryClient.invalidateQueries();
+    } catch (err) {
+      setMsg({ error: explainError(err) });
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <Panel title="New product · created in your Shopify store">
+      <div className="grid grid-cols-1 md:grid-cols-4 gap-3 mb-3">
+        <div className="md:col-span-2"><Field label="Title"><input className={inputCls} value={p.title} onChange={(e) => setP({ ...p, title: e.target.value })} placeholder="Mac Mini M5 · Limited drop" /></Field></div>
+        <Field label="Price (USD, Shopify)"><input className={inputCls} value={p.priceUsd} onChange={(e) => setP({ ...p, priceUsd: e.target.value })} placeholder="1000.00" /></Field>
+        <Field label="Stock"><input className={inputCls} value={p.inventory} onChange={(e) => setP({ ...p, inventory: e.target.value })} /></Field>
+        <div className="md:col-span-3"><Field label="Description"><input className={inputCls} value={p.description} onChange={(e) => setP({ ...p, description: e.target.value })} /></Field></div>
+        <Field label="Photos"><input type="file" accept="image/*" multiple className="text-[12px] font-mono" onChange={(e) => setFiles(Array.from(e.target.files ?? []))} /></Field>
+      </div>
+      <label className="flex items-center gap-2 text-[12px] font-mono mb-3">
+        <input type="checkbox" checked={launch} onChange={(e) => setLaunch(e.target.checked)} /> Launch as a fair drop now
+      </label>
+      {launch && (
+        <div className="grid grid-cols-2 md:grid-cols-5 gap-3 mb-3">
+          <Field label="Face price (SUI)"><input className={inputCls} value={d.price} onChange={(e) => setD({ ...d, price: e.target.value })} /></Field>
+          <Field label="Units"><input className={inputCls} value={d.units} onChange={(e) => setD({ ...d, units: e.target.value })} /></Field>
+          <Field label="Entries close (min)"><input className={inputCls} value={d.entry} onChange={(e) => setD({ ...d, entry: e.target.value })} /></Field>
+          <Field label="Claim window (min)"><input className={inputCls} value={d.claim} onChange={(e) => setD({ ...d, claim: e.target.value })} /></Field>
+          <Field label="Layaway interval (min)"><input className={inputCls} value={d.interval} onChange={(e) => setD({ ...d, interval: e.target.value })} /></Field>
+        </div>
+      )}
+      <Btn onClick={() => void submit()} disabled={busy || !p.title || !p.priceUsd}>{busy ? 'Creating…' : launch ? 'Create product & launch drop' : 'Create product'}</Btn>
+      {msg?.ok && <div className="mt-3 text-[12px] font-mono text-emerald-800">✓ {msg.ok} {msg.digest && <a className="underline" href={suiscanTx(msg.digest)} target="_blank" rel="noreferrer">tx</a>}</div>}
+      {msg?.warnings?.map((w) => <div key={w} className="mt-1 text-[11px] font-mono text-amber-800">⚠ {w}</div>)}
+      {msg?.error && <div className="mt-3 text-[12px] font-mono text-red-800">✕ {msg.error}</div>}
+    </Panel>
+  );
+}
+
 function ShopifyLaunch() {
   const world = useWorldId();
   const queryClient = useQueryClient();
@@ -63,22 +163,9 @@ function ShopifyLaunch() {
     setMsg(null);
     try {
       const variant = pick.product.variants.find((v) => v.id === pick.variantId)!;
-      const t = await signAndExecute(
-        createDropTx({
-          title: `${pick.product.title}${variant.title !== 'Default Title' ? ` — ${variant.title}` : ''}`,
-          facePriceMist: toMist(f.price),
-          units: Number(f.units),
-          minTier: 0,
-          entryDeadlineMs: Date.now() + Number(f.entry) * 60_000,
-          claimWindowMs: Number(f.claim) * 60_000,
-          installmentIntervalMs: Number(f.interval) * 60_000,
-        }),
-      );
-      const dropId = t.effects.changedObjects.find((o) => o.idOperation === 'Created' && o.outputOwner?.$kind === 'Shared')?.objectId;
-      if (!dropId) throw new Error('drop created but its id was not found in the effects');
-      const res = await fetch('/api/shopify/link', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ dropId, productId: pick.product.id, variantId: pick.variantId }) });
-      const body = await res.json();
-      if (!res.ok) throw new Error(`drop ${dropId} created, but linking failed: ${body.message || body.error}`);
+      const title = `${pick.product.title}${variant.title !== 'Default Title' ? ` — ${variant.title}` : ''}`;
+      const digest = await launchLinkedDrop(title, pick.product.id, pick.variantId, f);
+      const t = { digest };
       setMsg({ ok: `Drop live and linked to ${pick.product.title}. The product page now links to it.`, digest: t.digest });
       setPick(null);
       await queryClient.invalidateQueries();
@@ -159,6 +246,7 @@ export default function MerchantView() {
       </Panel>
 
       <ShopifyLaunch />
+      <NewProduct />
 
       <section className="space-y-4">
         <h3 className="font-serif text-2xl">My drops</h3>
