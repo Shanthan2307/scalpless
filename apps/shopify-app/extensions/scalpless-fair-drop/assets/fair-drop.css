@@ -1,0 +1,96 @@
+.scalpless-drop {
+  --sd-blue: #1d4fb4;
+  --sd-blue-soft: #e4ecfb;
+  --sd-line: #dfe3ea;
+  --sd-text: #111;
+  --sd-muted: #555;
+  margin: 1.25rem 0;
+  padding: 1.25rem;
+  border: 1.5px solid var(--sd-blue);
+  border-radius: 10px;
+  background: #f8faff;
+  color: var(--sd-text);
+  font-family: inherit;
+}
+.scalpless-drop__head {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  gap: 0.75rem;
+  margin-bottom: 1rem;
+  font-size: 0.85rem;
+}
+.scalpless-drop__badge {
+  background: var(--sd-blue-soft);
+  color: var(--sd-blue);
+  font-weight: 700;
+  padding: 0.3rem 0.6rem;
+  border-radius: 6px;
+  white-space: nowrap;
+}
+.scalpless-drop__status {
+  color: var(--sd-text);
+  text-align: right;
+}
+.scalpless-drop__stats {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+  gap: 0.6rem;
+  margin-bottom: 1rem;
+}
+.scalpless-drop__stat {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+  padding: 0.7rem 0.8rem;
+  background: #fff;
+  border: 1px solid var(--sd-line);
+  border-radius: 8px;
+}
+.scalpless-drop__stat span {
+  font-size: 0.72rem;
+  color: var(--sd-muted);
+}
+.scalpless-drop__stat strong {
+  font-size: 1.05rem;
+  line-height: 1.2;
+}
+.scalpless-drop__cta {
+  display: block;
+  text-align: center;
+  background: var(--sd-blue);
+  color: #fff !important;
+  font-weight: 700;
+  font-size: 1rem;
+  padding: 0.95rem 1rem;
+  border-radius: 8px;
+  text-decoration: none !important;
+  transition: filter 0.15s ease;
+}
+.scalpless-drop__cta:hover {
+  filter: brightness(1.1);
+}
+.scalpless-drop__cta.is-secondary {
+  background: #fff;
+  color: var(--sd-blue) !important;
+  border: 1.5px solid var(--sd-blue);
+}
+.scalpless-drop__fine {
+  margin: 0.9rem 0 0;
+  font-size: 0.78rem;
+  line-height: 1.45;
+  color: var(--sd-muted);
+}
+.scalpless-drop__nocart {
+  margin-top: 0.5rem;
+  padding: 0.85rem 1rem;
+  border: 1px solid #bbb;
+  text-align: center;
+  color: #777;
+  font-size: 0.95rem;
+}
+@media (max-width: 480px) {
+  .scalpless-drop__stats {
+    grid-template-columns: 1fr;
+  }
+}
