@@ -6,6 +6,8 @@ import { getSession, setSession, clearSession, type SessionPayload } from './ser
 import { humanStore, type HumanRecord } from './services/human-store.service';
 import { authenticateAgent, requireIntent, AgentkitError } from './services/agentkit.service';
 import { randomBytes } from 'crypto';
+import { startMirror, mirrorState } from './services/mirror.service';
+import { ledgerEvents } from './services/multibaas.service';
 import { underwrite } from './services/underwriting.service';
 
 const app = express();
@@ -356,6 +358,81 @@ app.post('/api/underwriting/evaluate', async (req, res, next) => {
   }
 });
 
+// ---- Curvegrid MultiBaas RWA ledger (read side) ----------------------------------------------
+
+const STAGES = ['None', 'Won', 'Liveness verified', 'Paid', 'Layaway', 'Financed', 'Listed', 'Resold', 'Redeemed', 'Shipped', 'Layaway defaulted'];
+const CREDITS = ['None', 'Loan opened', 'Repayment', 'Loan closed', 'Marked late', 'Defaulted'];
+const norm = (h: string) => `0x${h.replace(/^0x/, '').toLowerCase().padStart(64, '0')}`;
+
+app.get('/api/ledger/status', (_req, res) => {
+  const m = mirrorState();
+  res.json({
+    ledger: process.env.RWA_LEDGER_ADDRESS ?? null,
+    explorer: process.env.RWA_LEDGER_ADDRESS ? `https://sepolia.basescan.org/address/${process.env.RWA_LEDGER_ADDRESS}` : null,
+    processed: m.processed,
+    lastRunAt: m.lastRunAt,
+    lastError: m.lastError,
+  });
+});
+
+// Lifecycle of one claim, as indexed by MultiBaas.
+app.get('/api/ledger/claims/:id', async (req, res, next) => {
+  try {
+    const id = norm(req.params.id);
+    const events = (await ledgerEvents()).filter((e) => e.inputs.claimId && norm(e.inputs.claimId) === id).reverse();
+    res.json({
+      claimId: id,
+      timeline: events.map((e) => ({
+        event: e.name,
+        stage: e.name === 'ClaimStageChanged' ? STAGES[Number(e.inputs.stage)] : e.name === 'ClaimRedeemed' ? 'Redeemed' : 'Shipped',
+        at: e.triggeredAt,
+        baseTx: e.txHash,
+        shopifyOrder: e.inputs.shopifyOrder,
+        tracking: e.inputs.tracking,
+      })),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Per-drop summary for the merchant dashboard.
+app.get('/api/ledger/drops', async (_req, res, next) => {
+  try {
+    const events = (await ledgerEvents()).reverse(); // oldest first
+    const drops = new Map<string, { dropId: string; title: string; shopifyVariant: string; units: number; claims: Map<string, string> }>();
+    for (const e of events) {
+      if (e.name === 'DropListed') {
+        drops.set(norm(e.inputs.dropId), { dropId: norm(e.inputs.dropId), title: e.inputs.title, shopifyVariant: e.inputs.shopifyVariant, units: Number(e.inputs.units), claims: new Map() });
+      } else if (e.name === 'ClaimStageChanged') {
+        drops.get(norm(e.inputs.dropId))?.claims.set(norm(e.inputs.claimId), STAGES[Number(e.inputs.stage)]);
+      } else if (e.name === 'ClaimRedeemed' || e.name === 'ClaimShipped') {
+        for (const d of drops.values()) if (d.claims.has(norm(e.inputs.claimId))) d.claims.set(norm(e.inputs.claimId), e.name === 'ClaimRedeemed' ? 'Redeemed' : 'Shipped');
+      }
+    }
+    res.json({
+      drops: [...drops.values()].map((d) => {
+        const byStage: Record<string, number> = {};
+        for (const st of d.claims.values()) byStage[st] = (byStage[st] ?? 0) + 1;
+        return { dropId: d.dropId, title: d.title, shopifyVariant: d.shopifyVariant, units: d.units, claims: d.claims.size, byStage };
+      }),
+    });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// A human's credit history (used by the underwriting agent).
+app.get('/api/ledger/credit/:humanKey', async (req, res, next) => {
+  try {
+    const key = norm(req.params.humanKey);
+    const events = (await ledgerEvents({ eventSignature: 'CreditEvent(bytes32,uint8,uint64,bytes32)' })).filter((e) => norm(e.inputs.humanKey) === key);
+    res.json({ history: events.reverse().map((e) => ({ kind: CREDITS[Number(e.inputs.kind)], amountMist: e.inputs.amountMist, at: e.triggeredAt, baseTx: e.txHash })) });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // ---- errors ----------------------------------------------------------------------------------
 
 app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
@@ -372,6 +449,7 @@ app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
 });
 
 export const server = app.listen(env.PORT, () => {
+  startMirror();
   console.log(`[Scalpless Backend] Listening on port ${env.PORT}`);
   console.log(`[Scalpless Backend] Package ID: ${env.PACKAGE_ID}`);
   console.log(`[Scalpless Backend] Attestation pubkey: ${attestationService.getPublicKeyHex()}`);
