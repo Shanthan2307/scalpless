@@ -1,0 +1,13 @@
+{
+  "network": "base-sepolia",
+  "chainId": 84532,
+  "address": "0xA15b03D31F32c8Da244d972121DF6f1091c66110",
+  "operator": "0xB74e41cdE38E49b1Be0565769165dB31f5D5cAA5",
+  "deployTx": "0x769b08de4458ebac64ddca5c73845db5b38ca37ec2d56459ce21ce4868f018bd",
+  "block": "47336359",
+  "multibaas": {
+    "label": "scalpless_rwa_ledger",
+    "alias": "scalpless_ledger",
+    "version": "1.0"
+  }
+}
