@@ -1,0 +1,65 @@
+{% comment %}
+  Scalpless fair drop — product-page app block.
+  Shows the live on-chain drop for this product (read from Sui in the shopper's browser) and
+  replaces the theme's buy buttons: a fair-drop item can't be bought by a checkout bot.
+  The drop id comes from the product metafield scalpless.drop_id, written by Scalpless when the
+  merchant launches the drop.
+{% endcomment %}
+{%- assign drop_id = product.metafields.scalpless.drop_id.value -%}
+{%- if drop_id != blank -%}
+  <div
+    class="scalpless-drop"
+    data-scalpless-drop="{{ drop_id | escape }}"
+    data-app-url="{{ block.settings.app_url | escape }}"
+    data-graphql-url="{{ block.settings.graphql_url | escape }}"
+    data-disable-cart="{{ block.settings.disable_cart }}"
+    {{ block.shopify_attributes }}
+  >
+    <div class="scalpless-drop__head">
+      <span class="scalpless-drop__badge">Fair drop by Scalpless</span>
+      <span class="scalpless-drop__status" data-sd="status">Loading drop…</span>
+    </div>
+    <div class="scalpless-drop__stats">
+      <div class="scalpless-drop__stat"><span>Verified entries</span><strong data-sd="entries">—</strong></div>
+      <div class="scalpless-drop__stat"><span>Units</span><strong data-sd="units">—</strong></div>
+      <div class="scalpless-drop__stat"><span>Requires</span><strong data-sd="requires">—</strong></div>
+    </div>
+    <a class="scalpless-drop__cta" data-sd="cta" href="{{ block.settings.app_url | escape }}/?drop={{ drop_id | escape }}" target="_blank" rel="noopener">
+      Enter with World ID
+    </a>
+    <p class="scalpless-drop__fine" data-sd="fine">
+      One entry per verified human. Winners are drawn on-chain with Sui randomness.
+    </p>
+  </div>
+{%- endif -%}
+
+{% schema %}
+{
+  "name": "Scalpless fair drop",
+  "target": "section",
+  "javascript": "fair-drop.js",
+  "stylesheet": "fair-drop.css",
+  "enabled_on": { "templates": ["product"] },
+  "settings": [
+    {
+      "type": "text",
+      "id": "app_url",
+      "label": "Scalpless app URL",
+      "default": "http://localhost:3000",
+      "info": "Where shoppers verify with World ID and enter the drop."
+    },
+    {
+      "type": "text",
+      "id": "graphql_url",
+      "label": "Sui GraphQL endpoint",
+      "default": "https://graphql.testnet.sui.io/graphql"
+    },
+    {
+      "type": "checkbox",
+      "id": "disable_cart",
+      "label": "Replace add-to-cart on fair-drop products",
+      "default": true
+    }
+  ]
+}
+{% endschema %}
