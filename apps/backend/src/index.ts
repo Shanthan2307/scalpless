@@ -8,6 +8,7 @@ import { authenticateAgent, requireIntent, AgentkitError } from './services/agen
 import { randomBytes } from 'crypto';
 import { startMirror, mirrorState } from './services/mirror.service';
 import { ledgerEvents } from './services/multibaas.service';
+import { runKeeper, keeperActivity, startKeeper } from './services/keeper.service';
 import { underwrite } from './services/underwriting.service';
 
 const app = express();
@@ -433,6 +434,22 @@ app.get('/api/ledger/credit/:humanKey', async (req, res, next) => {
   }
 });
 
+// ---- Keeper agent -------------------------------------------------------------------------------
+
+app.get('/api/keeper/activity', (_req, res) => res.json({ activity: keeperActivity() }));
+
+// preview: what the agent would do and why (no transactions). Executing spends operator gas, so it
+// needs a verified human session.
+app.post('/api/keeper/run', async (req, res, next) => {
+  try {
+    const preview = req.body?.execute !== true;
+    if (!preview && !requireSession(req, res)) return;
+    res.json({ preview, actions: await runKeeper(preview) });
+  } catch (err) {
+    next(err);
+  }
+});
+
 // ---- errors ----------------------------------------------------------------------------------
 
 app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
@@ -450,6 +467,7 @@ app.use((err: unknown, _req: Request, res: Response, _next: NextFunction) => {
 
 export const server = app.listen(env.PORT, () => {
   startMirror();
+  startKeeper();
   console.log(`[Scalpless Backend] Listening on port ${env.PORT}`);
   console.log(`[Scalpless Backend] Package ID: ${env.PACKAGE_ID}`);
   console.log(`[Scalpless Backend] Attestation pubkey: ${attestationService.getPublicKeyHex()}`);
