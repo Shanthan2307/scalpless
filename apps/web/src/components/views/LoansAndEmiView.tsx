@@ -1,10 +1,11 @@
 'use client';
 
 import { useState } from 'react';
+import { useQuery, useQueryClient } from '@tanstack/react-query';
 import { useCurrentAccount } from '@mysten/dapp-kit-react';
 import { normalizeSuiAddress } from '@mysten/sui/utils';
 import { useWorldId } from '../world/WorldIdProvider';
-import { useActions } from './actions';
+import { suiscanTx, useActions } from './actions';
 import { useBalances, useLoans, useNow, countdown, usePool } from '../../lib/hooks';
 import { amountOwed, mist, toMist, type LoanJson, type PoolJson } from '../../lib/chain';
 import { depositTx, markTx, repayTx, withdrawTx } from '../../lib/tx';
@@ -52,6 +53,74 @@ function Tranche({ t, pool, lp }: { t: 'senior' | 'junior'; pool: PoolJson; lp: 
         <input className={`${inputCls} w-24`} value={amount} onChange={(e) => setAmount(e.target.value)} />
         <Btn onClick={() => void run(`Deposit ${t}`, () => depositTx(t, toMist(amount), me))} disabled={!account || !!busy}>Deposit SUI</Btn>
         <Btn variant="outline" onClick={() => void run(`Withdraw ${t}`, () => withdrawTx(t, lp, me))} disabled={!account || !!busy || lp === 0n}>Withdraw all</Btn>
+      </div>
+    </Panel>
+  );
+}
+
+interface AgentAction {
+  at: string;
+  action: string;
+  subject: string;
+  reason: string;
+  model?: string;
+  txDigest?: string;
+  error?: string;
+}
+
+const ACTION_LABEL: Record<string, string> = { mark_late: 'Marked late', mark_default: 'Defaulted loan', default_layaway: 'Defaulted layaway' };
+
+function KeeperAgent() {
+  const world = useWorldId();
+  const queryClient = useQueryClient();
+  const activity = useQuery({ queryKey: ['keeper'], queryFn: async () => (await (await fetch('/api/keeper/activity')).json()).activity as AgentAction[], refetchInterval: 10_000 });
+  const [preview, setPreview] = useState<AgentAction[] | null>(null);
+  const [busy, setBusy] = useState<'preview' | 'run' | null>(null);
+  const [error, setError] = useState('');
+
+  const call = async (execute: boolean) => {
+    setBusy(execute ? 'run' : 'preview');
+    setError('');
+    try {
+      const res = await fetch('/api/keeper/run', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ execute }) });
+      const body = await res.json();
+      if (!res.ok) throw new Error(body.message || body.error);
+      setPreview(execute ? null : body.actions);
+      if (execute) await queryClient.invalidateQueries();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'keeper failed');
+    } finally {
+      setBusy(null);
+    }
+  };
+
+  return (
+    <Panel title="AI keeper agent · enforces schedules on-chain">
+      <p className="text-[13px] text-[#6B6B6B] mb-4 max-w-[760px]">
+        The agent only acts when the contract&apos;s own conditions have passed (missed installment + grace, term + grace, overdue layaway) —
+        Sui re-checks them — and Gemini writes the reason for each action.
+      </p>
+      <div className="flex gap-2 mb-4">
+        <Btn variant="outline" onClick={() => void call(false)} disabled={!!busy}>{busy === 'preview' ? 'Checking…' : 'Preview'}</Btn>
+        <Btn onClick={() => void call(true)} disabled={!!busy || !world.session}>{busy === 'run' ? 'Running…' : 'Run agent'}</Btn>
+      </div>
+      {error && <div className="text-[12px] font-mono text-red-800 mb-3">{error}</div>}
+      {preview && (
+        <div className="mb-4 text-[12px] font-mono">
+          {preview.length === 0 ? <span className="text-[#6B6B6B]">Nothing is due — every loan and layaway is on schedule.</span> : preview.map((a, i) => (
+            <div key={i} className="border-l-2 border-amber-400 pl-3 mb-2">Would {ACTION_LABEL[a.action]?.toLowerCase() ?? a.action} {a.subject.slice(0, 10)}… — {a.reason}</div>
+          ))}
+        </div>
+      )}
+      <div className="divide-y divide-[#E5E5E0] text-[12px] font-mono">
+        {(activity.data ?? []).length === 0 ? <Empty>No agent actions yet.</Empty> : activity.data!.map((a, i) => (
+          <div key={i} className="py-2">
+            <span className="text-[#6B6B6B]">{new Date(a.at).toLocaleTimeString()}</span> · <strong>{ACTION_LABEL[a.action] ?? a.action}</strong> {a.subject.slice(0, 10)}… — {a.reason}
+            {a.txDigest && <> · <a className="underline text-[#1D3557]" href={suiscanTx(a.txDigest)} target="_blank" rel="noreferrer">tx</a></>}
+            {a.error && <span className="text-red-800"> · failed: {a.error}</span>}
+            {a.model && <span className="text-[#6B6B6B]"> · {a.model}</span>}
+          </div>
+        ))}
       </div>
     </Panel>
   );
@@ -120,7 +189,9 @@ export default function LoansAndEmiView() {
         })()}
       </Panel>
 
-      <Panel title="Keeper · enforce the schedule (anyone can)">
+      <KeeperAgent />
+
+      <Panel title="Keeper · enforce the schedule manually (anyone can)">
         {(loans.data ?? []).length === 0 ? (
           <Empty>No active loans.</Empty>
         ) : (
