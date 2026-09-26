@@ -17,4 +17,3 @@ redirect_urls = ["http://localhost:3000/api/shopify/callback"]
 api_version = "2025-10"
 
 [build]
-include_config_on_deploy = true
