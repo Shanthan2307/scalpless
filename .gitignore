@@ -1,0 +1,16 @@
+node_modules/
+.next/
+.env
+scratch/
+dist/
+build/
+.DS_Store
+.sui_config/sui.keystore
+
+# verified-human registry (World ID registrations)
+apps/backend/data/
+*.tsbuildinfo
+packages/sui-contracts/build/
+
+# local Sui CLI config / keystore
+.sui_config/
