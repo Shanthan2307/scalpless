@@ -223,3 +223,10 @@ export function buyTx(a: Attestation, claimId: string, priceMist: bigint) {
   return tx;
 }
 
+// ---- redemption -----------------------------------------------------------------------------
+
+export function redeemTx(claimId: string) {
+  const tx = new Transaction();
+  tx.moveCall({ target: fn('redeem', 'redeem'), arguments: [tx.object(claimId)] });
+  return tx;
+}

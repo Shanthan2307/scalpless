@@ -1,6 +1,7 @@
 'use client';
 
 import { useState } from 'react';
+import { useQuery } from '@tanstack/react-query';
 import { useCurrentAccount } from '@mysten/dapp-kit-react';
 import { normalizeSuiAddress } from '@mysten/sui/utils';
 import { useWorldId } from '../world/WorldIdProvider';
@@ -16,6 +17,7 @@ import {
   listTx,
   payInFullTx,
   payInstallmentTx,
+  redeemTx,
   startLayawayTx,
   verifyLivenessTx,
 } from '../../lib/tx';
@@ -131,9 +133,122 @@ function ClaimCard({ id, c, now }: { id: string; c: ClaimJson; now: number }) {
               Try to scalp at 111%
             </Btn>
           </div>
+          <RedeemForm claimId={id} />
         </div>
       )}
     </div>
+  );
+}
+
+function RedeemForm({ claimId }: { claimId: string }) {
+  const { run, busy } = useActions();
+  const [open, setOpen] = useState(false);
+  const [f, setF] = useState({ name: '', address1: '', city: '', zip: '', country: 'US', email: '' });
+  const [error, setError] = useState('');
+  const set = (k: keyof typeof f) => (e: React.ChangeEvent<HTMLInputElement>) => setF({ ...f, [k]: e.target.value });
+
+  const redeem = async () => {
+    setError('');
+    const res = await fetch('/api/redemptions', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ claimId, shipping: f }) });
+    const body = await res.json().catch(() => ({}));
+    if (!res.ok) return setError(body.message || body.error || 'could not register the address');
+    await run('Redeem for delivery', () => redeemTx(claimId));
+  };
+
+  if (!open) {
+    return (
+      <div className="flex flex-wrap items-center gap-3">
+        <Btn variant="outline" onClick={() => setOpen(true)}>Redeem for delivery</Btn>
+        <span className="text-[11px] font-mono text-[#6B6B6B]">Burns the claim on Sui and creates a paid order in the merchant&apos;s Shopify store.</span>
+      </div>
+    );
+  }
+  return (
+    <Panel title="Redeem for delivery · ship to">
+      <div className="grid grid-cols-1 md:grid-cols-3 gap-3 mb-3">
+        {(['name', 'address1', 'city', 'zip', 'country', 'email'] as const).map((k) => (
+          <input key={k} className={inputCls} placeholder={k === 'address1' ? 'street address' : k} value={f[k]} onChange={set(k)} />
+        ))}
+      </div>
+      <div className="flex gap-2">
+        <Btn onClick={() => void redeem()} disabled={!!busy || !f.name || !f.address1 || !f.city || !f.zip || !f.country}>Burn claim &amp; order</Btn>
+        <Btn variant="outline" onClick={() => setOpen(false)}>Cancel</Btn>
+      </div>
+      {error && <div className="mt-2 text-[12px] font-mono text-red-800">{error}</div>}
+    </Panel>
+  );
+}
+
+interface RedemptionView {
+  claimId: string;
+  itemName?: string;
+  status: string;
+  shipTo: string;
+  shopifyOrderName?: string;
+  tracking?: string;
+  suiTx?: string;
+  error?: string;
+}
+
+function Deliveries() {
+  const world = useWorldId();
+  const q = useQuery({
+    queryKey: ['redemptions', world.session?.wallet],
+    queryFn: async () => (await (await fetch('/api/redemptions')).json()) as { redemptions: RedemptionView[]; shopifyConnected: boolean },
+    enabled: !!world.session,
+    refetchInterval: 5_000,
+  });
+  if (!world.session) return <Empty>Verify with World ID to see your deliveries.</Empty>;
+  const list = q.data?.redemptions ?? [];
+  if (list.length === 0) return <Empty>No redeemed items yet.</Empty>;
+  return (
+    <div className="space-y-3">
+      {!q.data?.shopifyConnected && <Notice tone="warn">The merchant&apos;s Shopify store isn&apos;t connected yet — orders are created as soon as it is.</Notice>}
+      {list.map((r) => <Delivery key={r.claimId} r={r} />)}
+    </div>
+  );
+}
+
+const DELIVERY_STATUS: Record<string, string> = {
+  awaiting_redeem_tx: 'Address saved — sign the redeem transaction',
+  redeemed: 'Claim burned on Sui — creating the Shopify order',
+  order_created: 'Order placed with the merchant',
+  shipped: 'Shipped',
+  order_failed: 'Order creation failed',
+};
+
+function Delivery({ r }: { r: RedemptionView }) {
+  const t = useQuery({
+    queryKey: ['timeline', r.claimId],
+    queryFn: async () => (await (await fetch(`/api/ledger/claims/${r.claimId}`)).json()) as { timeline?: { stage: string; at: string; baseTx: string }[] },
+    refetchInterval: 10_000,
+  });
+  return (
+    <Panel>
+      <div className="flex flex-wrap justify-between gap-2 text-[12px] font-mono">
+        <div>
+          <span className="font-serif text-lg">{r.itemName ?? 'Claim'}</span> · claim {r.claimId.slice(0, 10)}… · ship to {r.shipTo}
+        </div>
+        <div className="font-bold">
+          {DELIVERY_STATUS[r.status] ?? r.status}
+          {r.shopifyOrderName && ` · Shopify ${r.shopifyOrderName}`}
+          {r.tracking && ` · tracking ${r.tracking}`}
+        </div>
+      </div>
+      {r.error && <div className="text-[11px] font-mono text-red-800 mt-1">{r.error}</div>}
+      {(t.data?.timeline ?? []).length > 0 && (
+        <ol className="mt-3 flex flex-wrap gap-2 text-[11px] font-mono">
+          {t.data!.timeline!.map((s, i) => (
+            <li key={i} className="border border-[#E5E5E0] px-2 py-1">
+              {s.stage} ·{' '}
+              <a className="underline text-[#1D3557]" href={`https://sepolia.basescan.org/tx/${s.baseTx}`} target="_blank" rel="noreferrer">
+                {new Date(s.at).toLocaleTimeString()}
+              </a>
+            </li>
+          ))}
+        </ol>
+      )}
+    </Panel>
   );
 }
 
@@ -165,6 +280,12 @@ export default function ResaleMarketView() {
       <section className="space-y-4">
         <h3 className="font-serif text-2xl">My claims</h3>
         {!account ? <Empty>Connect your wallet.</Empty> : claims.isLoading ? <Empty>Loading…</Empty> : claims.error ? <Notice tone="warn">Could not load claims: {String(claims.error)}</Notice> : (claims.data ?? []).length === 0 ? <Empty>No claims in this wallet. Win a drop first.</Empty> : claims.data!.map((c) => <ClaimCard key={c.id} id={c.id} c={c.json} now={now} />)}
+      </section>
+
+      <section className="space-y-4">
+        <h3 className="font-serif text-2xl">My deliveries</h3>
+        <p className="text-[13px] text-[#6B6B6B] max-w-[760px]">Each step is recorded on the Scalpless RWA ledger on Base Sepolia through Curvegrid MultiBaas.</p>
+        <Deliveries />
       </section>
 
       <section className="space-y-4">
