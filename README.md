@@ -1,9 +1,22 @@
+<p align="center">
+  <img src="docs/assets/scalpless-logo.webp" alt="Scalpless: fan protection" width="560">
+</p>
+
 # Scalpless — fair drops for Shopify
 
 **One human, one fair chance.** Scalpless is a Shopify plugin and on-chain protocol for hype
 launches: every buyer is a World ID-verified unique human, winners are drawn with Sui's on-chain
 randomness, each win is a tokenized claim on a real unit of the merchant's inventory, and people who
 can't pay upfront can finance it with an uncollateralized loan backed by their own identity.
+
+## Demo video
+
+<!-- TODO: replace VIDEO_ID with the YouTube id of the demo once it's uploaded -->
+[![Watch the Scalpless demo](https://img.shields.io/badge/%E2%96%B6%20Watch%20the%20demo-coming%20soon-1d4fb4?style=for-the-badge)](https://www.youtube.com/watch?v=VIDEO_ID)
+
+*Demo video coming soon:* a shopper enters a Shopify fair drop with World ID, wins in the on-chain
+draw, borrows on themselves, and redeems for a real Shopify order; the merchant sees each unit on the
+MultiBaas RWA ledger.
 
 ---
 
