@@ -706,3 +706,30 @@ fun market_one_resale_per_drop() {
     buy(&mut sc, BOB, bob_key(), ONE_SUI);
     abort 0
 }
+
+// ---- redemption -------------------------------------------------------------------------------
+
+#[test]
+/// A paid claim is burned on redemption (the Redeemed event drives the Shopify order).
+fun redeem_burns_settled_claim() {
+    let (mut sc, mut clock) = setup();
+    settle_claim_for(&mut sc, &mut clock, ALICE, alice_key());
+    pay_in_full(&mut sc, &clock, ALICE);
+    sc.next_tx(ALICE);
+    let c = sc.take_from_sender<Claim>();
+    scalpless::redeem::redeem(c, sc.ctx());
+    sc.next_tx(ALICE);
+    assert!(!ts::has_most_recent_for_address<Claim>(ALICE));
+    finish(sc, clock);
+}
+
+#[test, expected_failure(abort_code = claim::EWrongStatus)]
+/// Unpaid wins can't be redeemed.
+fun redeem_requires_payment() {
+    let (mut sc, mut clock) = setup();
+    settle_claim_for(&mut sc, &mut clock, ALICE, alice_key());
+    sc.next_tx(ALICE);
+    let c = sc.take_from_sender<Claim>();
+    scalpless::redeem::redeem(c, sc.ctx());
+    abort 0
+}
