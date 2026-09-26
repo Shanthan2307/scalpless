@@ -109,11 +109,31 @@ export async function linkDrop(p: { dropId: string; productId: string; variantId
     { product: { id: p.productId, descriptionHtml: description } },
   );
   userErrors(upd.productUpdate.userErrors);
+  // The storefront block (apps/shopify-app, "Scalpless fair drop") reads the drop id from here.
+  await ensureDropMetafieldDefinition();
+  const mf = await admin<{ metafieldsSet: { userErrors: any[] } }>(
+    `mutation($m: [MetafieldsSetInput!]!) { metafieldsSet(metafields: $m) { userErrors { field message } } }`,
+    { m: [{ ownerId: p.productId, namespace: 'scalpless', key: 'drop_id', type: 'single_line_text_field', value: p.dropId }] },
+  );
+  userErrors(mf.metafieldsSet.userErrors);
   const tag = await admin<{ tagsAdd: { userErrors: any[] } }>(`mutation($id: ID!, $tags: [String!]!) { tagsAdd(id: $id, tags: $tags) { userErrors { field message } } }`, {
     id: p.productId,
     tags: ['scalpless-drop'],
   });
   userErrors(tag.tagsAdd.userErrors);
+}
+
+let definitionReady = false;
+/** Product metafield scalpless.drop_id, readable by the storefront. Idempotent. */
+async function ensureDropMetafieldDefinition() {
+  if (definitionReady) return;
+  const d = await admin<{ metafieldDefinitionCreate: { userErrors: { code?: string; message: string }[] } }>(
+    `mutation($d: MetafieldDefinitionInput!) { metafieldDefinitionCreate(definition: $d) { userErrors { code message } } }`,
+    { d: { name: 'Scalpless drop', namespace: 'scalpless', key: 'drop_id', type: 'single_line_text_field', ownerType: 'PRODUCT', description: 'Sui object id of the fair drop for this product', access: { storefront: 'PUBLIC_READ' } } },
+  );
+  const errs = d.metafieldDefinitionCreate.userErrors.filter((e) => e.code !== 'TAKEN' && !/in use|already/i.test(e.message));
+  if (errs.length) throw new Error(`Shopify: ${errs.map((e) => e.message).join('; ')}`);
+  definitionReady = true;
 }
 
 async function variantPrice(variantId: string) {
@@ -188,4 +208,103 @@ export function startShopify() {
   console.log(`[shopify] connected to ${process.env.SHOPIFY_STORE_DOMAIN}`);
   void syncShopify();
   setInterval(() => void syncShopify(), POLL_MS);
+}
+
+// ---- create products from Scalpless ---------------------------------------------------------------
+
+export interface NewProduct {
+  title: string;
+  description: string;
+  priceUsd: string;
+  inventory: number;
+  images: { filename: string; mimeType: string; base64: string }[];
+}
+
+/** Upload a file through Shopify's staged uploads; returns the resourceUrl for media creation. */
+async function stagedUpload(file: NewProduct['images'][number]): Promise<string> {
+  const bytes = Buffer.from(file.base64, 'base64');
+  const d = await admin<{ stagedUploadsCreate: { stagedTargets: { url: string; resourceUrl: string; parameters: { name: string; value: string }[] }[]; userErrors: any[] } }>(
+    `mutation($input: [StagedUploadInput!]!) {
+      stagedUploadsCreate(input: $input) { stagedTargets { url resourceUrl parameters { name value } } userErrors { field message } }
+    }`,
+    { input: [{ resource: 'IMAGE', filename: file.filename, mimeType: file.mimeType, httpMethod: 'POST', fileSize: String(bytes.length) }] },
+  );
+  userErrors(d.stagedUploadsCreate.userErrors);
+  const target = d.stagedUploadsCreate.stagedTargets[0];
+  const form = new FormData();
+  for (const p of target.parameters) form.append(p.name, p.value);
+  form.append('file', new Blob([bytes], { type: file.mimeType }), file.filename);
+  const up = await fetch(target.url, { method: 'POST', body: form });
+  if (!up.ok) throw new Error(`Shopify upload failed (${up.status})`);
+  return target.resourceUrl;
+}
+
+/** Stock an inventory item at the store's first location (activating it there if needed). */
+export async function setStock(inventoryItemId: string, quantity: number) {
+  const loc = await admin<{ locations: { nodes: { id: string }[] } }>(`{ locations(first: 1) { nodes { id } } }`);
+  const locationId = loc.locations.nodes[0]?.id;
+  if (!locationId) throw new Error('no store location');
+  const act = await admin<{ inventoryActivate: { userErrors: { message: string }[] } }>(
+    `mutation($item: ID!, $loc: ID!, $qty: Int) { inventoryActivate(inventoryItemId: $item, locationId: $loc, available: $qty) { userErrors { field message } } }`,
+    { item: inventoryItemId, loc: locationId, qty: quantity },
+  );
+  if (!act.inventoryActivate.userErrors.length) return;
+  // Already stocked there: set the quantity instead.
+  const inv = await admin<{ inventorySetQuantities: { userErrors: any[] } }>(
+    `mutation($input: InventorySetQuantitiesInput!) { inventorySetQuantities(input: $input) { userErrors { field message } } }`,
+    { input: { name: 'available', reason: 'correction', ignoreCompareQuantity: true, quantities: [{ inventoryItemId, locationId, quantity }] } },
+  );
+  userErrors(inv.inventorySetQuantities.userErrors);
+}
+
+/**
+ * Create a product in the Shopify store: media, price, stock, published to the Online Store.
+ * Steps that need scopes not yet granted are reported in `warnings` instead of failing.
+ */
+export async function createProduct(p: NewProduct) {
+  const warnings: string[] = [];
+  const media = [];
+  for (const img of p.images) media.push({ originalSource: await stagedUpload(img), mediaContentType: 'IMAGE', alt: p.title });
+
+  const created = await admin<{ productCreate: { product: { id: string; handle: string; variants: { nodes: { id: string; inventoryItem: { id: string } }[] } } | null; userErrors: any[] } }>(
+    `mutation($product: ProductCreateInput!, $media: [CreateMediaInput!]) {
+      productCreate(product: $product, media: $media) {
+        product { id handle variants(first: 1) { nodes { id inventoryItem { id } } } }
+        userErrors { field message }
+      }
+    }`,
+    { product: { title: p.title, descriptionHtml: `<p>${p.description.replace(/</g, '&lt;')}</p>`, status: 'ACTIVE', vendor: 'ScalpLess-curve' }, media },
+  );
+  userErrors(created.productCreate.userErrors);
+  const product = created.productCreate.product!;
+  const variant = product.variants.nodes[0];
+
+  const price = await admin<{ productVariantsBulkUpdate: { userErrors: any[] } }>(
+    `mutation($productId: ID!, $variants: [ProductVariantsBulkInput!]!) {
+      productVariantsBulkUpdate(productId: $productId, variants: $variants) { userErrors { field message } }
+    }`,
+    { productId: product.id, variants: [{ id: variant.id, price: p.priceUsd, inventoryItem: { tracked: true } }] },
+  );
+  userErrors(price.productVariantsBulkUpdate.userErrors);
+
+  try {
+    await setStock(variant.inventoryItem.id, p.inventory);
+  } catch (err) {
+    warnings.push(`stock not set (${err instanceof Error ? err.message : err}) — set it in Shopify admin`);
+  }
+
+  try {
+    const pubs = await admin<{ publications: { nodes: { id: string; name: string }[] } }>(`{ publications(first: 20) { nodes { id name } } }`);
+    const store = pubs.publications.nodes.find((n) => /online store/i.test(n.name));
+    if (!store) throw new Error('Online Store sales channel not found');
+    const pub = await admin<{ publishablePublish: { userErrors: any[] } }>(
+      `mutation($id: ID!, $input: [PublicationInput!]!) { publishablePublish(id: $id, input: $input) { userErrors { field message } } }`,
+      { id: product.id, input: [{ publicationId: store.id }] },
+    );
+    userErrors(pub.publishablePublish.userErrors);
+  } catch (err) {
+    warnings.push(`not published to the Online Store (${err instanceof Error ? err.message : err}) — needs read_publications + write_publications: deploy the app config (apps/shopify-app) or publish it in Shopify admin`);
+  }
+
+  return { productId: product.id, variantId: variant.id, handle: product.handle, warnings };
 }
