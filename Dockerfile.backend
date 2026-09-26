@@ -1,0 +1,14 @@
+# Scalpless backend: Express API + mirror / Shopify / keeper loops.
+# State (verified humans, mirror cursor, redemptions, Shopify links) lives in
+# /app/apps/backend/data — mount a persistent volume there.
+FROM node:22-slim
+RUN corepack enable
+WORKDIR /app
+COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY apps/shopify-app/package.json apps/shopify-app/package.json
+RUN pnpm install --frozen-lockfile
+COPY packages/shared packages/shared
+COPY apps/backend apps/backend
+ENV NODE_ENV=production
+EXPOSE 4000
+CMD ["npx", "tsx", "apps/backend/src/index.ts"]
