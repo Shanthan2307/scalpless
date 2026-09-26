@@ -11,13 +11,15 @@ import { ledgerEvents } from './services/multibaas.service';
 import { runKeeper, keeperActivity, startKeeper } from './services/keeper.service';
 import { redemptions, orderCreatorReady } from './services/redemption.service';
 import { objectJson } from './services/chain.service';
-import { shopifyConfigured, shopInfo, listProducts, linkDrop, startShopify } from './services/shopify.service';
+import { shopifyConfigured, shopInfo, listProducts, linkDrop, startShopify, createProduct } from './services/shopify.service';
 import { underwrite } from './services/underwriting.service';
 
 const app = express();
 // The web app proxies /api/* to this server (apps/web/next.config.mjs), so the session cookie
 // is first-party and no CORS is needed.
-app.use(express.json({ limit: '256kb' }));
+const smallJson = express.json({ limit: '256kb' });
+// Product creation carries photos and parses its own larger body.
+app.use((req, res, next) => (req.method === 'POST' && req.path === '/api/shopify/products' ? next() : smallJson(req, res, next)));
 app.use((req, res, next) => {
   const started = Date.now();
   res.on('finish', () => console.log(`${req.method} ${req.path} → ${res.statusCode} (${Date.now() - started}ms)`));
@@ -482,6 +484,21 @@ app.get('/api/shopify/products', async (req, res, next) => {
     if (!requireSession(req, res)) return;
     if (!shopifyConfigured()) return res.status(409).json({ error: 'SHOPIFY_NOT_CONNECTED', message: 'Connect the Shopify store first' });
     res.json({ products: await listProducts() });
+  } catch (err) {
+    next(err);
+  }
+});
+
+// Create a product in the Shopify store from Scalpless (photos arrive base64-encoded).
+app.post('/api/shopify/products', express.json({ limit: '25mb' }), async (req, res, next) => {
+  try {
+    if (!requireSession(req, res)) return;
+    if (!shopifyConfigured()) return res.status(409).json({ error: 'SHOPIFY_NOT_CONNECTED', message: 'Connect the Shopify store first' });
+    const { title, description, priceUsd, inventory, images } = req.body ?? {};
+    if (typeof title !== 'string' || !title.trim() || !/^\d+(\.\d{1,2})?$/.test(String(priceUsd)) || !Number.isInteger(Number(inventory))) {
+      return res.status(400).json({ error: 'BAD_REQUEST', message: 'title, priceUsd (e.g. 749.95) and integer inventory are required' });
+    }
+    res.json(await createProduct({ title: title.trim(), description: String(description ?? ''), priceUsd: String(priceUsd), inventory: Number(inventory), images: Array.isArray(images) ? images : [] }));
   } catch (err) {
     next(err);
   }
